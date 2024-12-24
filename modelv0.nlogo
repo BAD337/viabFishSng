@@ -1,6 +1,5 @@
 breed [boats boat]
 breed [villages village]
-BATHie et madicke
 globals [
   ;; GIS Data
   myEnvelope
