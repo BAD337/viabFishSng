@@ -1,0 +1,65 @@
+
+to parse-string
+  ;; String à parser
+  ;let input "[[200, 300, 800], [0, 6, 3], [true, true, false]]"
+  let cleaned-string substring om_input 1 (length om_input - 1)
+  ;; show cleaned-string OK
+  ;; Initialiser une liste vide pour stocker les sous-listes
+  let sublists []
+  ;; Initialiser des variables pour stocker les sous-listes
+  let sublist-counter 0 ;; Compteur pour suivre quelle sous-liste est en cours
+  
+  ;; Extraire les sous-listes en parcourant la chaîne
+  while [length cleaned-string > 0] [
+    ;; Trouver la position de la première ouverture de crochets et fermeture
+    let start-pos position "[" cleaned-string
+    let end-pos position "]" cleaned-string
+    
+    ;; Vérifier que nous avons trouvé des crochets
+    ifelse (start-pos != -1 and end-pos != -1) [
+      ;; Extraire une sous-liste
+      let sub_list substring cleaned-string (start-pos + 1) end-pos
+      ;; Réduire `cleaned-string` pour enlever `sub_list` et son encadrement
+      set cleaned-string substring cleaned-string (end-pos + 1) (length cleaned-string)
+      
+      ;set sub_list remove-commas sub_list
+      ;; Ajouter la sous-liste à la bonne variable
+      if sublist-counter = 0 [
+        ;; Trouver la position de la première ouverture de crochets et fermeture
+        set nbPirogues_l sub_list
+        set nbPirogues_l csv:from-row nbPirogues_l
+      ] 
+      if sublist-counter = 1 [
+        set nbClosed_l sub_list
+        set nbClosed_l csv:from-row nbClosed_l
+      ] 
+      if sublist-counter = 2 [
+        set reserve_l sub_list
+        set reserve_l csv:from-row reserve_l
+      ]
+      
+      ;; Incrémenter le compteur de sous-listes
+      set sublist-counter sublist-counter + 1
+     
+    ][
+      ;; Si nous ne trouvons plus de crochets, quitter la boucle
+      stop
+    ]
+  ]
+end
+
+to listUpdate
+  
+    ask boats [die]
+    set nbBoats first nbPirogues_l
+    set nbPirogues_l but-first nbPirogues_l
+    createBoat
+
+
+  set ReserveIntegrale first nbClosed_l
+  set nbClosed_l but-first nbClosed_l
+  
+  set ZonesExclusionPeche first reserve_l
+  set reserve_l but-first reserve_l
+  
+end
