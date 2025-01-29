@@ -2,6 +2,9 @@ breed [boats boat]
 breed [villages village]
 globals [
   ;; GIS Data
+  inConflict? 
+  inCollaboration? 
+  satisfaction
   myEnvelope
   lac
   place
@@ -47,7 +50,14 @@ villages-own[
   lakeVillage ;; bol
 ]
 
-boats-own[
+boats-own[team maxDistance ;@
+origine          ;; "local" ou "exogene"@
+  maxDistance      ;; distance maximale de déplacement@
+  currentTarget    ;; position actuelle visée@
+  distanceTravelled   ;; Distance totale parcourue@
+  energyConsumed      ;; Énergie totale consommée@
+  catch               ;; Quantité de poisson pêché@
+  profit       
  ;myVillage
   team ; bol
   ReleveFilet
@@ -81,6 +91,32 @@ to setup
   set place gis:load-dataset "data/villages.shp"
   set exclusionPeche gis:load-dataset "data/zoneExclusionPeche.shp"
   setup-world-envelope
+ create-boats 50 [ ;; Crée 50 pêcheurs@
+    setxy random-xcor random-ycor ;; Position initiale aléatoire
+    set team one-of ["endogène" "exogène"] ;; Attribuer une origine aléatoire
+    if team = "endogène" [ set maxDistance 5 ] ;; Distance pour les pêcheurs endogènes
+    if team = "exogène" [ set maxDistance 15 ] ;; Distance pour les pêcheurs exogènes
+    ;set shape "boat" ;; Forme de la tortue
+    set color ifelse-value (team = "endogène") [green] [blue] ;; Couleur selon l'origine
+     set satisfaction [] ;; Initialisation comme liste vide@
+    set AST [] ;; Initialisation de AST comme liste vide pour chaque agent@
+  ]
+  create-boats 50 [
+    setxy random-xcor random-ycor  ;; Position initiale aléatoire@
+    ifelse random 100 < 50 [       ;; 50% des pirogues sont locales@
+      set origine "local"
+      set maxDistance 10           ;; Distance maximale pour les locaux@
+    ] [
+      set origine "exogene"
+      set maxDistance 30           ;; Distance maximale pour les exogènes@
+    ]
+    set currentTarget nobody       ;; Initialisation du point cible@
+    set satisfaction [] ;; Initialisation comme liste vide@
+    set AST [] ;; Initialisation de AST comme liste vide pour chaque agent@
+    set currentTarget one-of patches
+  ]
+
+
 
   ask patches [
     set pcolor gray
@@ -193,7 +229,131 @@ to go
     ask lakeCells with[excluPeche = FALSE][
       set pcolor scale-color blue biomass 0 kLakeCell
   ]]
+ ask boats [
+  if currentTarget = nobody or currentTarget = 0 [
+    let potentialTargets patches in-radius maxDistance
+    if any? potentialTargets [
+      set currentTarget one-of potentialTargets
+      ]
+  ]
+]
 
+
+ask boats [
+    if currentTarget = nobody or currentTarget = 0 [
+      show (word "Erreur : currentTarget pour le bateau " self " est " currentTarget)
+    ]
+    if currentTarget != nobody [
+      let distance-to-target distance currentTarget
+      let energyCostPerUnit 0.5
+      set energyConsumed energyConsumed + (distance-to-target * energyCostPerUnit)
+      set distanceTravelled distanceTravelled + distance-to-target;@
+    ] ]
+  ask boats [
+    if currentTarget = nobody or currentTarget = 0 [
+      show (word "Erreur : currentTarget pour le bateau " self " est " currentTarget)
+    ]
+    if currentTarget = nobody or distance currentTarget < 1 [
+      ;; Trouver un nouveau patch cible dans la portée maxDistance
+      let potentialTargets patches in-radius maxDistance
+      set currentTarget one-of potentialTargets
+    ]
+    let fishingIncome catch * 10                 ;; Revenu par unité de poisson@
+    let energyCost energyConsumed * 2            ;; Coût énergétique total@
+    set profit fishingIncome - energyCost        ;; Rentabilité nette@
+  ];@
+ let zonesProches patches with [distancexy 0 0 <= 10]  ;; Zones à moins de 10 unités du centre du village
+  ; Réinitialiser les états de conflit et de collaboration
+  ask boats [
+    set inConflict? false
+    set inCollaboration? false
+  ]
+
+  ; Déplacements et interactions
+  ask boats [
+    if currentTarget = nobody or distance currentTarget < 1 [
+      ; Trouver un nouveau patch cible
+      let potentialTargets patches in-radius maxDistance
+      set currentTarget one-of potentialTargets
+    ]
+
+    ; Détecter les autres bateaux dans la même zone
+    ;let boats other boats-here
+
+
+    if any? boats [
+      if team = 1 and any? boats with [team = 2] [
+        ;; Conflit entre locaux et étrangers
+        set inConflict? true
+        ask boats with [team = 2] [set inConflict? true]
+        ; Réduction de l'efficacité de pêche
+        set catch max list 0 (catch - random 2)
+      ]
+      ifelse team = 2 and any? boats with [team = 1] [
+        ;; Conflit entre étrangers et locaux
+        set inConflict? true
+        ask boats with [team = 1] [set inConflict? true]
+        ; Réduction de l'efficacité de pêche
+        set catch max list 0 (catch - random 2)
+      ] [
+        ;; Collaboration
+        set inCollaboration? true
+        ask boats [set inCollaboration? true]
+        ; Augmentation de l'efficacité de pêche
+        set catch catch + random 3
+      ]
+    ]
+  ]
+  ;@
+ask boats [
+  ;; Vérifier si currentTarget est valide
+  if currentTarget = nobody or distance currentTarget < 1 [
+    ;; Trouver un nouveau patch cible dans la portée maxDistance
+    let potentialTargets patches in-radius maxDistance
+    if any? potentialTargets [
+      set currentTarget one-of potentialTargets
+    ]
+      ;; Si aucun target n'est disponible
+      set currentTarget nobody
+
+  ]
+
+
+  ;; Vérifier que currentTarget est encore valide avant de calculer la distance
+  if currentTarget != nobody [
+    let distance-to-target distance currentTarget
+    let energyCostPerUnit 0.5
+    set energyConsumed energyConsumed + (distance-to-target * energyCostPerUnit)
+    set distanceTravelled distanceTravelled + distance-to-target
+  ]
+
+    ;; Optionnel : message d'erreur ou gestion si aucun target n'est disponible
+    show (word "Attention : aucun target disponible pour le bateau " self)
+
+;@
+   ; Pêche dans la zone actuelle
+  ; if distance currentTarget <= maxDistance [
+   ;  let fishAtPatch random 5
+   ;  set catch catch + fishAtPatch
+ ;]
+if currentTarget != nobody [
+      ;let distance-to-target distance currentTarget
+      ;let energyCostPerUnit 0.5
+     ; set energyConsumed energyConsumed + (distance-to-target * energyCostPerUnit)
+     ; set distanceTravelled distanceTravelled + distance-to-target
+    ;; Mise à jour de la distance parcourue et de l'énergie consommée
+    let distance-to-target distance currentTarget
+    let energyCostPerUnit 0.5
+    set energyConsumed energyConsumed + (distance-to-target * energyCostPerUnit)
+    set distanceTravelled distanceTravelled + distance-to-target
+  ]
+  ]
+
+  ; Analyser les résultats des conflits et collaborations
+  let totalConflicts count boats with [inConflict? = true]
+  let totalCollaborations count boats with [inCollaboration? = true]
+  print (word "Conflits totaux : " totalConflicts)
+  print (word "Collaborations totales : " totalCollaborations)
   ;print sumBiomass
   ;print sumtest
 
