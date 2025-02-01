@@ -1,10 +1,26 @@
 breed [boats boat]
 breed [villages village]
 globals [
+   distance-village  ;; Distance d'une zone donnée par rapport au village                   4444
+  zone-pêche-radius  ;; Rayon de la zone de pêche autour du village                         444
+  rentabilite_senegalais_total
+  rentabilite_etrangers_total                        ;             444444444444444
+  distance_senegalais
+  distance_etrangers
+  biomasse_senegalais
+  biomasse_etrangers
+  prix_du_poisson
+  cout_deplacement
+  PropBiomassPeche  ;; Proportion de la biomasse capturée (en pourcentage)      #########
+  CostPerUnitDistance  ;; Coût par unité de distance parcourue        ###############
+  PricePerKg  ;; Prix du poisson par kilogramme                ###########
+  distance-rentabilite   ;; Liste pour stocker les distances                       #####
+  rentabilite_senegalais ;; Liste des rentabilités pour les pêcheurs sénégalais           #####
+  rentabilite_etrangers   ;; Liste des rentabilités pour les pêcheurs étrangers          ######
+  rentabilite_senegalais-temp
+  rentabilite_etrangers-temp   ;   ########
+
   ;; GIS Data
-  inConflict? 
-  inCollaboration? 
-  satisfaction
   myEnvelope
   lac
   place
@@ -38,6 +54,13 @@ globals [
   MFETb
   MFETc
 ]
+turtles-own [                                   ;                                    44
+  type-de-pecheur  ;; Local ou étranger
+  rentabilite  ;; Rentabilité du pêcheur
+  ;zone  ;; Zone de pêche du pêcheur
+]                                                  ;                                 444
+
+
 
 patches-own[
  lake ; bol
@@ -50,14 +73,7 @@ villages-own[
   lakeVillage ;; bol
 ]
 
-boats-own[team maxDistance ;@
-origine          ;; "local" ou "exogene"@
-  maxDistance      ;; distance maximale de déplacement@
-  currentTarget    ;; position actuelle visée@
-  distanceTravelled   ;; Distance totale parcourue@
-  energyConsumed      ;; Énergie totale consommée@
-  catch               ;; Quantité de poisson pêché@
-  profit       
+boats-own[
  ;myVillage
   team ; bol
   ReleveFilet
@@ -67,8 +83,13 @@ origine          ;; "local" ou "exogene"@
   capital_total
   firstExitSatifaction  ;; if 9999  = NA  MFET in mathias et al. 2024
   AST                   ;; mean sojourn time  in Mathias et al. 2024 as list
-  ASTc                  ;; a count on MST to have one number per boat
+  ASTc                  ;; a count on MST to have one number per boat [
+  origine            ;; Origine du pêcheur : "endogene" ou "exogene" ;                      ##
+  distance-max-pêche ;; Distance maximale de pêche pour ce pêcheur       ;                  ##
+  village-attached      ;; Village auquel le pêcheur est rattaché                           ;##
+  rayon-deplacement     ;; Rayon de déplacement pour le pêcheur (local ou étranger)  ;       ##
 ]
+
 
 extensions [gis]
 
@@ -79,11 +100,46 @@ to InitiVar
   set InitHeading random 360
   set MSTc_l []
   set MSTb_l []
+  set CostPerUnitDistance 5 ;; Exemple : 5 unités monétaires par unité de distance parcourue            ########
+  set PropBiomassPeche 10 ;; Exemple : 10% de la biomasse est capturée à chaque pêche        ############
+  set PricePerKg 5  ;; Exemple : Le prix du poisson est de 5 unités monétaires par kilogramme         #######
 end
 
 to setup
   clear-all
-  reset-ticks
+  ;reset-ticks
+  set rentabilite_senegalais_total 0  ;; Initialisation de la rentabilité totale des sénégalais          4444444444
+  set rentabilite_etrangers_total 0  ;; Initialisation de la rentabilité totale des étrangers            4444
+  set rentabilite_senegalais []  ;; Liste vide des rentabilités des pêcheurs sénégalais   ###
+  set rentabilite_etrangers []    ;; Liste vide des rentabilités des pêcheurs étrangers
+  set rentabilite_senegalais-temp 0
+  set rentabilite_etrangers-temp 0
+  set CostPerUnitDistance 2  ;; Par exemple, 2 unités monétaires par distance        44444444444
+  set PropBiomassPeche 0.5  ;; 50% de la biomasse du patch
+  set PricePerKg 10         ;; Prix du poisson en unité monétaire        4444444444444
+
+
+  set distance-rentabilite []    ;; Liste vide pour stocker les distances
+
+  set prix_du_poisson 10  ;; prix du poisson
+  set zone-pêche-radius 5  ;; Par exemple, une zone de pêche de rayon 5 autour du village       444444
+
+   ;; Créer des pêcheurs (tortues)
+  create-boats 50 [
+    set color red  ;; Exemple de couleur pour les pêcheurs sénégalais
+    set type-de-pecheur "senegalais"                                            ;          44444
+    set rentabilite random 100
+    setxy random-xcor random-ycor  ;; Positionner au hasard                              4444
+    ;set zone random 30  ;; Positionner les pêcheurs dans la zone proche du village        444444'
+  ]
+  create-boats 50 [
+    set color green ;; Exemple de couleur pour les pêcheurs étrangers
+    set type-de-pecheur "etranger"                                                               ; 4444
+    set rentabilite random 100                                                       ;           44444444
+    setxy random-xcor random-ycor  ;; Positionner au hasard                  44444444
+    ;set zone random 30  ;; Positionner les pêcheurs dans la zone proche du village        ;             444444444
+  ]
+
   InitiVar
 
   set myEnvelope gis:load-dataset "data/envelope.shp"
@@ -91,32 +147,6 @@ to setup
   set place gis:load-dataset "data/villages.shp"
   set exclusionPeche gis:load-dataset "data/zoneExclusionPeche.shp"
   setup-world-envelope
- create-boats 50 [ ;; Crée 50 pêcheurs@
-    setxy random-xcor random-ycor ;; Position initiale aléatoire
-    set team one-of ["endogène" "exogène"] ;; Attribuer une origine aléatoire
-    if team = "endogène" [ set maxDistance 5 ] ;; Distance pour les pêcheurs endogènes
-    if team = "exogène" [ set maxDistance 15 ] ;; Distance pour les pêcheurs exogènes
-    ;set shape "boat" ;; Forme de la tortue
-    set color ifelse-value (team = "endogène") [green] [blue] ;; Couleur selon l'origine
-     set satisfaction [] ;; Initialisation comme liste vide@
-    set AST [] ;; Initialisation de AST comme liste vide pour chaque agent@
-  ]
-  create-boats 50 [
-    setxy random-xcor random-ycor  ;; Position initiale aléatoire@
-    ifelse random 100 < 50 [       ;; 50% des pirogues sont locales@
-      set origine "local"
-      set maxDistance 10           ;; Distance maximale pour les locaux@
-    ] [
-      set origine "exogene"
-      set maxDistance 30           ;; Distance maximale pour les exogènes@
-    ]
-    set currentTarget nobody       ;; Initialisation du point cible@
-    set satisfaction [] ;; Initialisation comme liste vide@
-    set AST [] ;; Initialisation de AST comme liste vide pour chaque agent@
-    set currentTarget one-of patches
-  ]
-
-
 
   ask patches [
     set pcolor gray
@@ -177,36 +207,46 @@ to setup
   let _nbBoatVillage ((nbBoats / count villages with[lakeVillage = TRUE]))
   ;show _nbBoatVillage ;; pour vérifier si l'arrondi tombe juste
 
-  ask villages with[lakeVillage = TRUE][
+  ask villages with[lakeVillage = TRUE][                                                                        ;###
     let _nearestPatch min-one-of (patches with [pcolor = blue or pcolor = green])[distance myself]
     move-to _nearestPatch ;; on déplace les villages près de l'eau
-    ;; Team = 1 : Sénégalais
-    if nbBoats > 0 [
-      ask patch-here[
-        sprout-boats precision(_nbBoatVillage * (ProportionSenegalais / 100)) 0  [
-          set color red
-          set shape "fisherboat"
-          set team 1
-          set heading InitHeading
-          set capital_total capital_totalI
-          set firstExitSatifaction 0
-          set AST []
-        ]
-        ;; Team = 2 : étrangers
-        sprout-boats precision((_nbBoatVillage * (1 - (ProportionSenegalais / 100)))) 0 [
-          set color green
-          set shape "fisherboat"
-          set team 2
-          set heading InitHeading
-          set capital_total capital_totalI
-          set firstExitSatifaction 0
-          set AST []
-        ]
-      ]
+
+  ;let _nbBoatVillage ((nbBoats / count villages with[lakeVillage = TRUE]))
+
+  ;; Créer les bateaux sénégalais (endogènes)
+  ask patch-here [
+    sprout-boats precision(_nbBoatVillage * (ProportionSenegalais / 100)) 0 [
+      set color red
+      set shape "fisherboat"
+      set team 1
+      set origine "endogene"  ;; Pêcheur sénégalais
+      set distance-max-pêche 18 ;; Distance maximale de pêche pour les pêcheurs locaux (par exemple, 5 km)
+      set rayon-deplacement 6 ;; Rayon de déplacement limité autour du village
+      set village-attached myself ;; Rattacher ce pêcheur au village
+      set capital_total capital_totalI
+      set firstExitSatifaction 0
+      set AST []
     ]
   ]
 
+  ;; Créer les bateaux étrangers (exogènes)
+  ask patch-here [
+    sprout-boats precision((_nbBoatVillage * (1 - (ProportionSenegalais / 100)))) 0 [
+      set color green
+      set shape "fisherboat"
+      set team 2
+      set origine "exogene"  ;; Pêcheur étranger
+      set distance-max-pêche 25 ;; Distance maximale de pêche pour les pêcheurs étrangers (par exemple, 10 km)
+      set rayon-deplacement 10;; Rayon de déplacement plus large
+      set village-attached nobody ;; Pas de village attaché pour les étrangers
+      set capital_total capital_totalI
+      set firstExitSatifaction 0
+      set AST []
+    ]
+  ]
+]                                                                                                                         ;####
 
+reset-ticks
   statSummary
 
 end
@@ -216,8 +256,53 @@ gis:set-world-envelope (gis:envelope-of myEnvelope)
 end
 
 to go
+  ;; Calculer les interactions entre les pêcheurs locaux et étrangers                             444444444444444
+  ask turtles [
+    ;; Calculer la rentabilité individuelle
+    set rentabilite random 100
 
-    ifelse ZonesExclusionPeche [
+    ;; Interaction avec les autres pêcheurs
+    let voisins turtles in-radius zone-pêche-radius  ;; Trouver les voisins dans la zone de pêche
+    let conflict-or-collaboration 0
+
+    ;; Vérifier s'il y a un conflit ou une collaboration
+    if any? voisins [
+      if [type-de-pecheur] of one-of voisins = "senegalais" and type-de-pecheur = "etranger" [
+        ;; Si un pêcheur sénégalais et un étranger sont proches, on a un conflit
+        set rentabilite rentabilite - 10
+        set conflict-or-collaboration "Conflit"
+      ]
+    if [type-de-pecheur] of one-of voisins = "etranger" and type-de-pecheur = "senegalais" [
+        ;; Si un pêcheur étranger et un sénégalais sont proches, on a une collaboration
+        set rentabilite rentabilite + 5
+        set conflict-or-collaboration "Collaboration"
+      ]
+    ]
+     ;; Suivi de la rentabilité totale pour chaque groupe
+    if type-de-pecheur = "senegalais" [
+      set rentabilite_senegalais_total rentabilite_senegalais_total + rentabilite
+    ]
+    if type-de-pecheur = "etranger" [
+      set rentabilite_etrangers_total rentabilite_etrangers_total + rentabilite
+    ]
+  ]
+    ;; Ajouter les données au graphique
+  set-current-plot "Interactions et Rentabilité"  ;; Assurez-vous que le graphique s'appelle "Rentabilité"
+  plotxy ticks rentabilite_senegalais_total  ;; Ajouter la rentabilité totale des sénégalais
+  plotxy ticks rentabilite_etrangers_total  ;; Ajouter la rentabilité totale des étrangers
+
+
+     ;; Tracer l'interaction
+   ; if conflict-or-collaboration = "Conflit" [
+   ;   set color red  ;; Changer la couleur en rouge en cas de conflit
+   ; ]
+   ; if conflict-or-collaboration = "Collaboration" [
+   ;   set color green  ;; Changer la couleur en vert en cas de collaboration
+   ; ]
+                        ;                                                       4444444444444444444444444
+
+
+ ifelse ZonesExclusionPeche [
     ask lakeCells with[excluPecheCells = TRUE] [set excluPeche TRUE]
     ask lakeCells with[excluPeche = TRUE][
       set pcolor scale-color green biomass 0 kLakeCell
@@ -229,131 +314,7 @@ to go
     ask lakeCells with[excluPeche = FALSE][
       set pcolor scale-color blue biomass 0 kLakeCell
   ]]
- ask boats [
-  if currentTarget = nobody or currentTarget = 0 [
-    let potentialTargets patches in-radius maxDistance
-    if any? potentialTargets [
-      set currentTarget one-of potentialTargets
-      ]
-  ]
-]
 
-
-ask boats [
-    if currentTarget = nobody or currentTarget = 0 [
-      show (word "Erreur : currentTarget pour le bateau " self " est " currentTarget)
-    ]
-    if currentTarget != nobody [
-      let distance-to-target distance currentTarget
-      let energyCostPerUnit 0.5
-      set energyConsumed energyConsumed + (distance-to-target * energyCostPerUnit)
-      set distanceTravelled distanceTravelled + distance-to-target;@
-    ] ]
-  ask boats [
-    if currentTarget = nobody or currentTarget = 0 [
-      show (word "Erreur : currentTarget pour le bateau " self " est " currentTarget)
-    ]
-    if currentTarget = nobody or distance currentTarget < 1 [
-      ;; Trouver un nouveau patch cible dans la portée maxDistance
-      let potentialTargets patches in-radius maxDistance
-      set currentTarget one-of potentialTargets
-    ]
-    let fishingIncome catch * 10                 ;; Revenu par unité de poisson@
-    let energyCost energyConsumed * 2            ;; Coût énergétique total@
-    set profit fishingIncome - energyCost        ;; Rentabilité nette@
-  ];@
- let zonesProches patches with [distancexy 0 0 <= 10]  ;; Zones à moins de 10 unités du centre du village
-  ; Réinitialiser les états de conflit et de collaboration
-  ask boats [
-    set inConflict? false
-    set inCollaboration? false
-  ]
-
-  ; Déplacements et interactions
-  ask boats [
-    if currentTarget = nobody or distance currentTarget < 1 [
-      ; Trouver un nouveau patch cible
-      let potentialTargets patches in-radius maxDistance
-      set currentTarget one-of potentialTargets
-    ]
-
-    ; Détecter les autres bateaux dans la même zone
-    ;let boats other boats-here
-
-
-    if any? boats [
-      if team = 1 and any? boats with [team = 2] [
-        ;; Conflit entre locaux et étrangers
-        set inConflict? true
-        ask boats with [team = 2] [set inConflict? true]
-        ; Réduction de l'efficacité de pêche
-        set catch max list 0 (catch - random 2)
-      ]
-      ifelse team = 2 and any? boats with [team = 1] [
-        ;; Conflit entre étrangers et locaux
-        set inConflict? true
-        ask boats with [team = 1] [set inConflict? true]
-        ; Réduction de l'efficacité de pêche
-        set catch max list 0 (catch - random 2)
-      ] [
-        ;; Collaboration
-        set inCollaboration? true
-        ask boats [set inCollaboration? true]
-        ; Augmentation de l'efficacité de pêche
-        set catch catch + random 3
-      ]
-    ]
-  ]
-  ;@
-ask boats [
-  ;; Vérifier si currentTarget est valide
-  if currentTarget = nobody or distance currentTarget < 1 [
-    ;; Trouver un nouveau patch cible dans la portée maxDistance
-    let potentialTargets patches in-radius maxDistance
-    if any? potentialTargets [
-      set currentTarget one-of potentialTargets
-    ]
-      ;; Si aucun target n'est disponible
-      set currentTarget nobody
-
-  ]
-
-
-  ;; Vérifier que currentTarget est encore valide avant de calculer la distance
-  if currentTarget != nobody [
-    let distance-to-target distance currentTarget
-    let energyCostPerUnit 0.5
-    set energyConsumed energyConsumed + (distance-to-target * energyCostPerUnit)
-    set distanceTravelled distanceTravelled + distance-to-target
-  ]
-
-    ;; Optionnel : message d'erreur ou gestion si aucun target n'est disponible
-    show (word "Attention : aucun target disponible pour le bateau " self)
-
-;@
-   ; Pêche dans la zone actuelle
-  ; if distance currentTarget <= maxDistance [
-   ;  let fishAtPatch random 5
-   ;  set catch catch + fishAtPatch
- ;]
-if currentTarget != nobody [
-      ;let distance-to-target distance currentTarget
-      ;let energyCostPerUnit 0.5
-     ; set energyConsumed energyConsumed + (distance-to-target * energyCostPerUnit)
-     ; set distanceTravelled distanceTravelled + distance-to-target
-    ;; Mise à jour de la distance parcourue et de l'énergie consommée
-    let distance-to-target distance currentTarget
-    let energyCostPerUnit 0.5
-    set energyConsumed energyConsumed + (distance-to-target * energyCostPerUnit)
-    set distanceTravelled distanceTravelled + distance-to-target
-  ]
-  ]
-
-  ; Analyser les résultats des conflits et collaborations
-  let totalConflicts count boats with [inConflict? = true]
-  let totalCollaborations count boats with [inCollaboration? = true]
-  print (word "Conflits totaux : " totalConflicts)
-  print (word "Collaborations totales : " totalCollaborations)
   ;print sumBiomass
   ;print sumtest
 
@@ -369,7 +330,8 @@ if currentTarget != nobody [
 
   ask lakeCells [
     grow-biomass
-    ;set pcolor scale-color blue biomass 0 (k / count lakeCells) ; quand c'est blanc c'est qu'il y a beaucoup de poisson vs noir plus de poisson
+    ;set pcolor scale-color blue biomass 0 (k / count lakeCells)
+    ; quand c'est blanc c'est qu'il y a beaucoup de poisson vs noir plus de poisson
   ]
 
   ;statSummary
@@ -380,6 +342,9 @@ if currentTarget != nobody [
   ; hypothese que mbanais et maliens ne posent pas leurs filets aux mêmes endroits
   ; et ne pechent pas autant de poisson par jour
   ask boats [
+    fishingEtrangers   ;                           ##########
+    fishingSenegalais  ;                        #############
+
   ifelse team = 1
     [
       set ReleveFilet 0 ; 1 relève de filet correspond à une relève de filet sur 1 patch (donc 12 relèves de filet = 1 filet de 3 km)
@@ -463,19 +428,123 @@ if currentTarget != nobody [
     ]
 
   ]
-
+  ; move ;; Déplacer le bateau vers une zone avec biomasse                 ###########
+;    fishing ;; Pêcher une fois arrivé                                 ################
   caluclG
   if sumBiomass <= 0[stop]
   statSummary
 
   ;print sumtest
+   ;; Calculer la rentabilité totale          #################
+  let total_profit sum [capital_total] of boats    ;###########
+  print total_profit            ;############"
 
+
+
+  ;; Définir la liste des distances à tester
+let liste_distances [5 15 30]
+
+;; Initialiser un indice pour itérer à travers la liste
+let i 0
+
+repeat (length liste_distances) [
+  ;; Obtenir la distance courante
+  let dist item i liste_distances
+
+  ;; Calculer la rentabilité pour les pêcheurs sénégalais
+  ask turtles with [color = red] [
+    let rentabilite_senegalais-local calculer_rentabilite self dist "senegalais"
+    set rentabilite_senegalais-temp rentabilite_senegalais-temp + rentabilite_senegalais-local
+  ]
+
+  ;; Calculer la rentabilité pour les pêcheurs étrangers
+  ask turtles with [color = green] [
+    let rentabilite_etrangers-local calculer_rentabilite self dist "etranger"
+    set rentabilite_etrangers-temp rentabilite_etrangers-temp + rentabilite_etrangers-local
+  ]
+
+  ;; Ajouter les résultats à la liste des rentabilités
+  set rentabilite_senegalais lput rentabilite_senegalais-temp rentabilite_senegalais
+  set rentabilite_etrangers lput rentabilite_etrangers-temp rentabilite_etrangers
+
+  ;; Réinitialiser les variables temporaires pour la prochaine distance
+  set rentabilite_senegalais-temp 0
+  set rentabilite_etrangers-temp 0
+
+  ;; Incrémenter l'indice pour passer à la distance suivante
+  set i i + 1
+]
+
+;; Tracer les résultats des rentabilités
+ plot-rentabilite
   tick
 end
 
-to move
-  move-to one-of lakeCells with[excluPeche = FALSE]
+to calculate-rentabilite
+  ;; Initialisation des variables globales avec des listes vides
+  set rentabilite_senegalais []  ;; Liste vide pour les rentabilités des sénégalais
+  set rentabilite_etrangers []  ;; Liste vide pour les rentabilités des étrangers
+
+  ;; Définition des distances sénégalaises et étrangères
+  let distances_senegalais [5 15 30]   ;; Liste des distances pour les sénégalais
+  let distances_etrangers [10 20 25]  ;; Liste des distances pour les étrangers
+
+  ;; Liste des distances à tester
+  let distances [5 15 30]
 end
+
+to move       ;                                               #####################
+  ; Déplacer vers un patch cible
+  move-to one-of lakeCells with[excluPeche = FALSE]
+
+  if origine = "endogene" [
+    ; Pêcheur sénégalais : rester proche du village (rayon limité autour du village)
+    let max-distance rayon-deplacement  ;; Rayon de déplacement pour les pêcheurs locaux
+    let max-patches max-distance / 0.25 ;; Conversion en nombre de patches
+    let patches-moved 0
+
+    ;; Déplacer dans un rayon autour du village
+    while [patches-moved < max-patches] [
+      let target-patch min-one-of patches in-radius max-distance [distance myself]  ;; Calcul de la distance par rapport à la tortue (bateau)
+      if target-patch != nobody [
+        move-to target-patch
+        set patches-moved patches-moved + 1
+      ]
+    ]
+  ]
+
+  if origine = "exogene" [
+    ;; Pêcheur étranger : plus grande liberté de mouvement (rayon étendu)
+    let max-distance rayon-deplacement  ;; Rayon de déplacement plus large pour les étrangers
+    let max-patches max-distance / 0.25 ;; Conversion en nombre de patches
+    let patches-moved 0
+
+    ;; Se déplacer librement dans la zone disponible
+    while [patches-moved < max-patches] [
+      let target-patch min-one-of patches with [biomass > 0] [distance myself]  ;; Calcul correct de la distance
+      if target-patch != nobody [
+        move-to target-patch
+        set patches-moved patches-moved + 1
+      ]
+    ]
+  ]
+;; Déplacer vers un patch avec biomasse
+  let target-patch min-one-of patches with [biomass > 0] [distance myself]
+  if target-patch != nobody [
+    let dist distance target-patch
+    move-to target-patch
+    ;; Calculer le coût du déplacement : plus la distance est grande, plus le coût est élevé
+    let cost (dist * CostPerUnitDistance) ;; Coût en fonction de la distance (en énergie ou en temps)
+     ;; Ajouter le coût au capital du pêcheur
+    set capital_total capital_total - cost ;; Le coût est déduit du capital total du pêcheur
+  ]
+
+
+end             ;                                                             #############
+
+
+
+
 
 ;; les pecheurs avancent dans une même direction : modelise lorsqu'ils relevent leurs filets
 to moveForward
@@ -508,10 +577,25 @@ to-report is_fishable? [patch_ahead]
   ]
 
   report fishable?
+
+
+
 end
 
 
 to fishingSenegalais
+  let _fishAvailable [biomass] of patch-here               ;                             ########################
+  let catch (PropBiomassPeche / 100) * _fishAvailable ;; Proportion de la biomasse capturée
+  set capture catch
+
+  ;; Réduire la biomasse disponible sur le patch
+  ask patch-here [
+    set biomass _fishAvailable - catch
+  ]
+    ;; Calculer la rentabilité : capture x prix - coût du déplacement
+  set capital_total capital_total + (catch * PricePerKg) - (CostPerUnitDistance * distance self)
+
+  ;                                                           ######################
   let _fishAvalableHere [biomass] of patch-here
 
   ; Proportion de poisson capturée par le filet sur le patch
@@ -542,6 +626,19 @@ to fishingSenegalais
 end
 
 to fishingEtrangers
+  let _fishAvailable [biomass] of patch-here               ;                             ########################
+  let catch (PropBiomassPeche / 100) * _fishAvailable ;; Proportion de la biomasse capturée
+  set capture catch
+
+  ;; Réduire la biomasse disponible sur le patch
+  ask patch-here [
+    set biomass _fishAvailable - catch
+  ]
+    ;; Calculer la rentabilité : capture x prix - coût du déplacement
+  set capital_total capital_total + (catch * PricePerKg) - (CostPerUnitDistance * distance self)
+
+  ;                                                           ######################
+
   let _fishAvalableHere [biomass] of patch-here
 
   ; Proportion de poisson capturée par le filet sur le patch
@@ -602,6 +699,86 @@ to calculSatisfaction
 
 end
 
+to-report calculer_rentabilite [pecheur dist pecheur-type]
+  ;; Calculer le coût de déplacement
+  let cout-deplacement (CostPerUnitDistance * dist)
+
+  ;; Calculer la biomasse capturée sur le patch
+  let biomasse-capturee (PropBiomassPeche * [biomass] of patch-here)
+
+  ;; Calculer le revenu en fonction de la biomasse capturée et du prix
+  let revenu (biomasse-capturee * PricePerKg)
+
+  ;; Initialisation de la rentabilité
+  ;let rentabilite 0
+
+  ;; Calcul de la rentabilité en fonction du type de pêcheur
+  if pecheur-type = "senegalais" [
+    set rentabilite revenu - cout-deplacement  ;; Rentabilité pour les pêcheurs sénégalais
+  ]
+
+  if pecheur-type = "etranger" [
+    set rentabilite revenu - cout-deplacement  ;; Rentabilité pour les pêcheurs étrangers
+  ]
+
+  ;; Retourner la rentabilité calculée
+  report rentabilite
+end
+
+to plot-rentabilite
+  ;; Créer le graphique "Rentabilité" et configurer l'axe X et Y
+ ;
+set-current-plot "Rentabilité"
+  clear-plot
+
+  ;; Rentabilité des pêcheurs sénégalais (couleur rouge)
+  set-plot-pen-color red
+  ask turtles with [color = red] [
+    let distances [1 2 3 4 5 6 7 8 9 10  11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30]
+    let i 0 ;; Initialiser l'index
+    while [i < length distances] [
+      let dist item i distances ;; Accéder à l'élément à l'index i
+      let rentabilite_senegalais_local calculer_rentabilite self dist "senegalais"
+      plotxy dist rentabilite_senegalais_local
+      set i i + 1 ;; Incrémenter l'index
+    ]
+  ]
+
+  ;; Rentabilité des pêcheurs étrangers (couleur verte)
+  set-plot-pen-color green
+  ask turtles with [color = green] [
+    let distances [1 2 3 4 5 6 7 8 9 10  11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30]
+    let i 0 ;; Initialiser l'index
+    while [i < length distances] [
+      let dist item i distances ;; Accéder à l'élément à l'index i
+      let rentabilite_etrangers_local calculer_rentabilite self dist "etranger"
+      plotxy dist rentabilite_etrangers_local
+      set i i + 1 ;; Incrémenter l'index
+    ]
+  ]
+end
+
+
+;to plot-rentabilite             ###########################################################################################
+ ; ;; Créer un graphique (plot) s'il n'en existe pas déjà
+  ;set-current-plot "Rentabilité"  ;; Nom du graphique
+  ;set-plot-x-range 0 30           ;; Plage de l'axe X (par exemple de 0 à 30 pour les distances)
+  ;set-plot-y-range 0 200       ;; Plage de l'axe Y (ajustez cette plage en fonction des résultats que vous attendez)
+
+;  clear-plot ;; Effacer les anciennes courbes
+
+  ;; Trace la rentabilité des pêcheurs sénégalais
+ ; plotxy 5 (item 0 rentabilite_senegalais) ;; distance 5 pour les pêcheurs sénégalais
+  ;plotxy 15 (item 1 rentabilite_senegalais) ;; distance 15 pour les pêcheurs sénégalais
+  ;plotxy 30 (item 2 rentabilite_senegalais) ;; distance 30 pour les pêcheurs sénégalais
+
+  ;; Trace la rentabilité des pêcheurs étrangers
+  ;plotxy 5 (item 0 rentabilite_etrangers) ;; distance 5 pour les pêcheurs étrangers
+  ;plotxy 15 (item 1 rentabilite_etrangers) ;; distance 15 pour les pêcheurs étrangers
+  ;plotxy 30 (item 2 rentabilite_etrangers) ;; distance 30 pour les pêcheurs étrangers
+;end              #######################################################################################################""""""
+
+
 to caluclG
   ;;MST et MFET a l'échelle de la simu
   ;; ces indicateurs sont compatible avec le papier de Mathias et al 2024
@@ -648,1183 +825,3 @@ to statSummary
     set medianMFET median[firstExitSatifaction] of boats
   ]
 end
-@#$#@#$#@
-GRAPHICS-WINDOW
-119
-33
-553
-468
--1
--1
-3.025
-1
-10
-1
-1
-1
-0
-1
-1
-1
--70
-70
--70
-70
-0
-0
-1
-ticks
-30.0
-
-BUTTON
-31
-38
-98
-71
-NIL
-setup
-NIL
-1
-T
-OBSERVER
-NIL
-NIL
-NIL
-NIL
-1
-
-BUTTON
-32
-78
-98
-111
-NIL
-go
-T
-1
-T
-OBSERVER
-NIL
-NIL
-NIL
-NIL
-1
-
-PLOT
-590
-38
-790
-188
-Lake Biomass Kg
-Jour
-NIL
-0.0
-10.0
-0.0
-10.0
-true
-false
-"" ""
-PENS
-"default" 1.0 0 -16777216 true "" "plot sumBiomass"
-"pen-1" 1.0 0 -7500403 true "" "plot satisfactionBiomassG"
-
-MONITOR
-590
-221
-675
-266
-NIL
-count boats
-17
-1
-11
-
-BUTTON
-32
-113
-95
-146
-NIL
-go
-NIL
-1
-T
-OBSERVER
-NIL
-NIL
-NIL
-NIL
-1
-
-SLIDER
-590
-263
-762
-296
-nbBoats
-nbBoats
-0
-500
-274.0
-1
-1
-NIL
-HORIZONTAL
-
-SLIDER
-527
-500
-699
-533
-PrixPoisson
-PrixPoisson
-0
-10000
-1900.0
-100
-1
-CFA/kg
-HORIZONTAL
-
-SLIDER
-526
-544
-735
-577
-CoutMaintenance
-CoutMaintenance
-0
-10000
-3000.0
-100
-1
-CFA/Jour
-HORIZONTAL
-
-SLIDER
-590
-378
-762
-411
-LongueurFilet
-LongueurFilet
-0
-10000
-2000.0
-250
-1
-Mètres
-HORIZONTAL
-
-PLOT
-806
-38
-1097
-190
-Capital moyen d'un pêcheur Sénégalais par jour
-Jour
-Capital CFA
-0.0
-10.0
-0.0
-10.0
-true
-false
-"" ""
-PENS
-"default" 1.0 0 -16777216 true "" "plot capital_moyen_1"
-"pen-1" 1.0 0 -7500403 true "" "plot SatisfactionCapital"
-
-SLIDER
-1074
-339
-1247
-372
-ReserveIntegrale
-ReserveIntegrale
-0
-12
-0.0
-1
-1
-mois
-HORIZONTAL
-
-SWITCH
-1281
-320
-1445
-353
-ZonesExclusionPeche
-ZonesExclusionPeche
-1
-1
--1000
-
-TEXTBOX
-591
-336
-741
-375
-La longueur des filets controle le nombre de sorties par jour (3km = 1 sortie)
-10
-0.0
-1
-
-TEXTBOX
-1077
-250
-1263
-333
-Une réserve intégrale de 8 mois par exemple signifie qu'il y a une interdiction de pêche pendant 8 mois, et sur les 4 restants les autres restrictions peuvent etre mises en place
-10
-0.0
-1
-
-TEXTBOX
-1283
-277
-1433
-316
-Les zones d'exclusion de pêche correspondent à celles de l'atelier de Mbane de novembre
-10
-0.0
-1
-
-SLIDER
-827
-378
-1046
-411
-PropBiomassPecheSenegalais
-PropBiomassPecheSenegalais
-0
-100
-1.0
-0.5
-1
-%
-HORIZONTAL
-
-SLIDER
-1077
-378
-1267
-411
-QtéMaxPoissonPirogue
-QtéMaxPoissonPirogue
-0
-1000
-34.0
-1
-1
-Kg
-HORIZONTAL
-
-SLIDER
-819
-265
-994
-298
-ProportionSenegalais
-ProportionSenegalais
-0
-100
-50.0
-1
-1
-%
-HORIZONTAL
-
-SLIDER
-827
-424
-1040
-457
-PropBiomassPecheEtrangers
-PropBiomassPecheEtrangers
-0
-100
-3.0
-0.5
-1
-%
-HORIZONTAL
-
-SLIDER
-590
-424
-813
-457
-LongueurFiletEtrangers
-LongueurFiletEtrangers
-0
-10000
-3000.0
-250
-1
-Mètres
-HORIZONTAL
-
-TEXTBOX
-1087
-226
-1237
-246
-RESERVES
-16
-0.0
-1
-
-SLIDER
-1077
-425
-1318
-458
-QtéMaxPoissonPirogueEtrangers
-QtéMaxPoissonPirogueEtrangers
-0
-1000
-31.0
-1
-1
-Kg
-HORIZONTAL
-
-TEXTBOX
-528
-478
-678
-498
-CAPITAL
-16
-0.0
-1
-
-TEXTBOX
-590
-318
-740
-338
-PECHE
-16
-0.0
-1
-
-TEXTBOX
-588
-203
-738
-223
-POPULATION
-16
-0.0
-1
-
-PLOT
-1120
-40
-1406
-190
-Capital moyen d'un pêcheur Etranger par jour
-Jour
-Capital CFA
-0.0
-10.0
-0.0
-10.0
-true
-false
-"" ""
-PENS
-"default" 1.0 0 -16777216 true "" "plot capital_moyen_2"
-
-SLIDER
-827
-322
-999
-355
-SortieSemaine
-SortieSemaine
-0
-7
-6.0
-1
-1
-Jours
-HORIZONTAL
-
-INPUTBOX
-371
-481
-494
-541
-SatisfactionCapital
-5000000.0
-1
-0
-Number
-
-INPUTBOX
-1170
-544
-1331
-604
-satifsactionCapitalG
-1.37E9
-1
-0
-Number
-
-INPUTBOX
-998
-544
-1159
-604
-satisfactionBiomassG
-100000.0
-1
-0
-Number
-
-MONITOR
-870
-505
-927
-550
-NIL
-MSTc
-2
-1
-11
-
-MONITOR
-870
-556
-927
-601
-NIL
-MFETc
-2
-1
-11
-
-INPUTBOX
-819
-196
-980
-256
-capital_totalI
-100000.0
-1
-0
-Number
-
-INPUTBOX
-993
-197
-1090
-257
-BiomassInit
-420000.0
-1
-0
-Number
-
-TEXTBOX
-1005
-606
-1155
-634
-Sans pêche Biomass Max = 462 000
-10
-0.0
-1
-
-MONITOR
-932
-506
-989
-551
-NIL
-MSTb
-2
-1
-11
-
-MONITOR
-933
-555
-990
-600
-NIL
-MFETb
-2
-1
-11
-
-TEXTBOX
-860
-486
-1010
-504
-A l'échelle de la simu
-12
-0.0
-1
-
-TEXTBOX
-837
-558
-872
-597
-First Exit Time
-9
-0.0
-1
-
-TEXTBOX
-836
-514
-874
-541
-Sejour Time
-9
-0.0
-1
-
-TEXTBOX
-1016
-521
-1280
-555
-Seuil de satisfaction à l'échelle du système 
-12
-0.0
-1
-
-TEXTBOX
-832
-471
-1381
-493
----------------------------------------------------------------------------------------------------------------------------------------
-12
-0.0
-1
-
-TEXTBOX
-830
-630
-1372
-651
----------------------------------------------------------------------------------------------------------------------------------------
-12
-0.0
-1
-
-TEXTBOX
-821
-508
-836
-610
-|\n|\n|\n|\n|\n|
-12
-0.0
-1
-
-TEXTBOX
-1367
-506
-1382
-608
-|\n|\n|\n|\n|\n|
-12
-0.0
-1
-
-TEXTBOX
-1224
-483
-1374
-506
-Indic Mathias et al.
-16
-0.0
-1
-
-INPUTBOX
-38
-519
-110
-579
-r_i
-0.015
-1
-0
-Number
-
-INPUTBOX
-38
-580
-108
-640
-diffB_i
-0.0
-1
-0
-Number
-
-@#$#@#$#@
-## TODO
-
-- les pirogues se déplace au hazard, est-ce qu'on garde un truc comme ça ?
-- Pas de réserve, a ajouter
-- typha
-
-## WHAT IS IT?
-
-(a general understanding of what the model is trying to show or explain)
-
-## HOW IT WORKS
-
-(what rules the agents use to create the overall behavior of the model)
-
-## HOW TO USE IT
-
-(how to use the model, including a description of each of the items in the Interface tab)
-
-## THINGS TO NOTICE
-
-(suggested things for the user to notice while running the model)
-
-## THINGS TO TRY
-
-(suggested things for the user to try to do (move sliders, switches, etc.) with the model)
-
-## EXTENDING THE MODEL
-
-(suggested things to add or change in the Code tab to make the model more complicated, detailed, accurate, etc.)
-
-## NETLOGO FEATURES
-
-(interesting or unusual features of NetLogo that the model uses, particularly in the Code tab; or where workarounds were needed for missing features)
-
-## RELATED MODELS
-
-(models in the NetLogo Models Library and elsewhere which are of related interest)
-
-## CREDITS AND REFERENCES
-
-(a reference to the model's URL on the web if it has one, as well as any other necessary credits, citations, and links)
-@#$#@#$#@
-default
-true
-0
-Polygon -7500403 true true 150 5 40 250 150 205 260 250
-
-airplane
-true
-0
-Polygon -7500403 true true 150 0 135 15 120 60 120 105 15 165 15 195 120 180 135 240 105 270 120 285 150 270 180 285 210 270 165 240 180 180 285 195 285 165 180 105 180 60 165 15
-
-arrow
-true
-0
-Polygon -7500403 true true 150 0 0 150 105 150 105 293 195 293 195 150 300 150
-
-box
-false
-0
-Polygon -7500403 true true 150 285 285 225 285 75 150 135
-Polygon -7500403 true true 150 135 15 75 150 15 285 75
-Polygon -7500403 true true 15 75 15 225 150 285 150 135
-Line -16777216 false 150 285 150 135
-Line -16777216 false 150 135 15 75
-Line -16777216 false 150 135 285 75
-
-bug
-true
-0
-Circle -7500403 true true 96 182 108
-Circle -7500403 true true 110 127 80
-Circle -7500403 true true 110 75 80
-Line -7500403 true 150 100 80 30
-Line -7500403 true 150 100 220 30
-
-butterfly
-true
-0
-Polygon -7500403 true true 150 165 209 199 225 225 225 255 195 270 165 255 150 240
-Polygon -7500403 true true 150 165 89 198 75 225 75 255 105 270 135 255 150 240
-Polygon -7500403 true true 139 148 100 105 55 90 25 90 10 105 10 135 25 180 40 195 85 194 139 163
-Polygon -7500403 true true 162 150 200 105 245 90 275 90 290 105 290 135 275 180 260 195 215 195 162 165
-Polygon -16777216 true false 150 255 135 225 120 150 135 120 150 105 165 120 180 150 165 225
-Circle -16777216 true false 135 90 30
-Line -16777216 false 150 105 195 60
-Line -16777216 false 150 105 105 60
-
-car
-false
-0
-Polygon -7500403 true true 300 180 279 164 261 144 240 135 226 132 213 106 203 84 185 63 159 50 135 50 75 60 0 150 0 165 0 225 300 225 300 180
-Circle -16777216 true false 180 180 90
-Circle -16777216 true false 30 180 90
-Polygon -16777216 true false 162 80 132 78 134 135 209 135 194 105 189 96 180 89
-Circle -7500403 true true 47 195 58
-Circle -7500403 true true 195 195 58
-
-circle
-false
-0
-Circle -7500403 true true 0 0 300
-
-circle 2
-false
-0
-Circle -7500403 true true 0 0 300
-Circle -16777216 true false 30 30 240
-
-cow
-false
-0
-Polygon -7500403 true true 200 193 197 249 179 249 177 196 166 187 140 189 93 191 78 179 72 211 49 209 48 181 37 149 25 120 25 89 45 72 103 84 179 75 198 76 252 64 272 81 293 103 285 121 255 121 242 118 224 167
-Polygon -7500403 true true 73 210 86 251 62 249 48 208
-Polygon -7500403 true true 25 114 16 195 9 204 23 213 25 200 39 123
-
-cylinder
-false
-0
-Circle -7500403 true true 0 0 300
-
-dot
-false
-0
-Circle -7500403 true true 90 90 120
-
-face happy
-false
-0
-Circle -7500403 true true 8 8 285
-Circle -16777216 true false 60 75 60
-Circle -16777216 true false 180 75 60
-Polygon -16777216 true false 150 255 90 239 62 213 47 191 67 179 90 203 109 218 150 225 192 218 210 203 227 181 251 194 236 217 212 240
-
-face neutral
-false
-0
-Circle -7500403 true true 8 7 285
-Circle -16777216 true false 60 75 60
-Circle -16777216 true false 180 75 60
-Rectangle -16777216 true false 60 195 240 225
-
-face sad
-false
-0
-Circle -7500403 true true 8 8 285
-Circle -16777216 true false 60 75 60
-Circle -16777216 true false 180 75 60
-Polygon -16777216 true false 150 168 90 184 62 210 47 232 67 244 90 220 109 205 150 198 192 205 210 220 227 242 251 229 236 206 212 183
-
-fish
-false
-0
-Polygon -1 true false 44 131 21 87 15 86 0 120 15 150 0 180 13 214 20 212 45 166
-Polygon -1 true false 135 195 119 235 95 218 76 210 46 204 60 165
-Polygon -1 true false 75 45 83 77 71 103 86 114 166 78 135 60
-Polygon -7500403 true true 30 136 151 77 226 81 280 119 292 146 292 160 287 170 270 195 195 210 151 212 30 166
-Circle -16777216 true false 215 106 30
-
-fisherboat
-true
-0
-Polygon -7500403 true true 60 120 75 135 225 135 240 120 240 135 225 150 75 150 60 135
-Line -7500403 true 225 120 255 165
-Circle -7500403 true true 240 150 30
-
-flag
-false
-0
-Rectangle -7500403 true true 60 15 75 300
-Polygon -7500403 true true 90 150 270 90 90 30
-Line -7500403 true 75 135 90 135
-Line -7500403 true 75 45 90 45
-
-flower
-false
-0
-Polygon -10899396 true false 135 120 165 165 180 210 180 240 150 300 165 300 195 240 195 195 165 135
-Circle -7500403 true true 85 132 38
-Circle -7500403 true true 130 147 38
-Circle -7500403 true true 192 85 38
-Circle -7500403 true true 85 40 38
-Circle -7500403 true true 177 40 38
-Circle -7500403 true true 177 132 38
-Circle -7500403 true true 70 85 38
-Circle -7500403 true true 130 25 38
-Circle -7500403 true true 96 51 108
-Circle -16777216 true false 113 68 74
-Polygon -10899396 true false 189 233 219 188 249 173 279 188 234 218
-Polygon -10899396 true false 180 255 150 210 105 210 75 240 135 240
-
-house
-false
-0
-Rectangle -7500403 true true 45 120 255 285
-Rectangle -16777216 true false 120 210 180 285
-Polygon -7500403 true true 15 120 150 15 285 120
-Line -16777216 false 30 120 270 120
-
-leaf
-false
-0
-Polygon -7500403 true true 150 210 135 195 120 210 60 210 30 195 60 180 60 165 15 135 30 120 15 105 40 104 45 90 60 90 90 105 105 120 120 120 105 60 120 60 135 30 150 15 165 30 180 60 195 60 180 120 195 120 210 105 240 90 255 90 263 104 285 105 270 120 285 135 240 165 240 180 270 195 240 210 180 210 165 195
-Polygon -7500403 true true 135 195 135 240 120 255 105 255 105 285 135 285 165 240 165 195
-
-line
-true
-0
-Line -7500403 true 150 0 150 300
-
-line half
-true
-0
-Line -7500403 true 150 0 150 150
-
-pentagon
-false
-0
-Polygon -7500403 true true 150 15 15 120 60 285 240 285 285 120
-
-person
-false
-0
-Circle -7500403 true true 110 5 80
-Polygon -7500403 true true 105 90 120 195 90 285 105 300 135 300 150 225 165 300 195 300 210 285 180 195 195 90
-Rectangle -7500403 true true 127 79 172 94
-Polygon -7500403 true true 195 90 240 150 225 180 165 105
-Polygon -7500403 true true 105 90 60 150 75 180 135 105
-
-plant
-false
-0
-Rectangle -7500403 true true 135 90 165 300
-Polygon -7500403 true true 135 255 90 210 45 195 75 255 135 285
-Polygon -7500403 true true 165 255 210 210 255 195 225 255 165 285
-Polygon -7500403 true true 135 180 90 135 45 120 75 180 135 210
-Polygon -7500403 true true 165 180 165 210 225 180 255 120 210 135
-Polygon -7500403 true true 135 105 90 60 45 45 75 105 135 135
-Polygon -7500403 true true 165 105 165 135 225 105 255 45 210 60
-Polygon -7500403 true true 135 90 120 45 150 15 180 45 165 90
-
-sheep
-false
-15
-Circle -1 true true 203 65 88
-Circle -1 true true 70 65 162
-Circle -1 true true 150 105 120
-Polygon -7500403 true false 218 120 240 165 255 165 278 120
-Circle -7500403 true false 214 72 67
-Rectangle -1 true true 164 223 179 298
-Polygon -1 true true 45 285 30 285 30 240 15 195 45 210
-Circle -1 true true 3 83 150
-Rectangle -1 true true 65 221 80 296
-Polygon -1 true true 195 285 210 285 210 240 240 210 195 210
-Polygon -7500403 true false 276 85 285 105 302 99 294 83
-Polygon -7500403 true false 219 85 210 105 193 99 201 83
-
-square
-false
-0
-Rectangle -7500403 true true 30 30 270 270
-
-square 2
-false
-0
-Rectangle -7500403 true true 30 30 270 270
-Rectangle -16777216 true false 60 60 240 240
-
-star
-false
-0
-Polygon -7500403 true true 151 1 185 108 298 108 207 175 242 282 151 216 59 282 94 175 3 108 116 108
-
-target
-false
-0
-Circle -7500403 true true 0 0 300
-Circle -16777216 true false 30 30 240
-Circle -7500403 true true 60 60 180
-Circle -16777216 true false 90 90 120
-Circle -7500403 true true 120 120 60
-
-tree
-false
-0
-Circle -7500403 true true 118 3 94
-Rectangle -6459832 true false 120 195 180 300
-Circle -7500403 true true 65 21 108
-Circle -7500403 true true 116 41 127
-Circle -7500403 true true 45 90 120
-Circle -7500403 true true 104 74 152
-
-triangle
-false
-0
-Polygon -7500403 true true 150 30 15 255 285 255
-
-triangle 2
-false
-0
-Polygon -7500403 true true 150 30 15 255 285 255
-Polygon -16777216 true false 151 99 225 223 75 224
-
-truck
-false
-0
-Rectangle -7500403 true true 4 45 195 187
-Polygon -7500403 true true 296 193 296 150 259 134 244 104 208 104 207 194
-Rectangle -1 true false 195 60 195 105
-Polygon -16777216 true false 238 112 252 141 219 141 218 112
-Circle -16777216 true false 234 174 42
-Rectangle -7500403 true true 181 185 214 194
-Circle -16777216 true false 144 174 42
-Circle -16777216 true false 24 174 42
-Circle -7500403 false true 24 174 42
-Circle -7500403 false true 144 174 42
-Circle -7500403 false true 234 174 42
-
-turtle
-true
-0
-Polygon -10899396 true false 215 204 240 233 246 254 228 266 215 252 193 210
-Polygon -10899396 true false 195 90 225 75 245 75 260 89 269 108 261 124 240 105 225 105 210 105
-Polygon -10899396 true false 105 90 75 75 55 75 40 89 31 108 39 124 60 105 75 105 90 105
-Polygon -10899396 true false 132 85 134 64 107 51 108 17 150 2 192 18 192 52 169 65 172 87
-Polygon -10899396 true false 85 204 60 233 54 254 72 266 85 252 107 210
-Polygon -7500403 true true 119 75 179 75 209 101 224 135 220 225 175 261 128 261 81 224 74 135 88 99
-
-wheel
-false
-0
-Circle -7500403 true true 3 3 294
-Circle -16777216 true false 30 30 240
-Line -7500403 true 150 285 150 15
-Line -7500403 true 15 150 285 150
-Circle -7500403 true true 120 120 60
-Line -7500403 true 216 40 79 269
-Line -7500403 true 40 84 269 221
-Line -7500403 true 40 216 269 79
-Line -7500403 true 84 40 221 269
-
-wolf
-false
-0
-Polygon -16777216 true false 253 133 245 131 245 133
-Polygon -7500403 true true 2 194 13 197 30 191 38 193 38 205 20 226 20 257 27 265 38 266 40 260 31 253 31 230 60 206 68 198 75 209 66 228 65 243 82 261 84 268 100 267 103 261 77 239 79 231 100 207 98 196 119 201 143 202 160 195 166 210 172 213 173 238 167 251 160 248 154 265 169 264 178 247 186 240 198 260 200 271 217 271 219 262 207 258 195 230 192 198 210 184 227 164 242 144 259 145 284 151 277 141 293 140 299 134 297 127 273 119 270 105
-Polygon -7500403 true true -1 195 14 180 36 166 40 153 53 140 82 131 134 133 159 126 188 115 227 108 236 102 238 98 268 86 269 92 281 87 269 103 269 113
-
-x
-false
-0
-Polygon -7500403 true true 270 75 225 30 30 225 75 270
-Polygon -7500403 true true 30 75 75 30 270 225 225 270
-@#$#@#$#@
-NetLogo 6.4.0
-@#$#@#$#@
-@#$#@#$#@
-@#$#@#$#@
-<experiments>
-  <experiment name="experiment" repetitions="1" runMetricsEveryStep="true">
-    <setup>setup</setup>
-    <go>go</go>
-    <timeLimit steps="3650"/>
-    <metric>sumBiomass</metric>
-    <metric>capital_moyen_1</metric>
-    <metric>capital_moyen_2</metric>
-    <metric>meanMST</metric>
-    <metric>medianMFET</metric>
-    <metric>MFETb</metric>
-    <metric>MFETc</metric>
-    <metric>MSTb</metric>
-    <metric>MSTc</metric>
-    <steppedValueSet variable="LongueurFilet" first="2000" step="1000" last="3000"/>
-    <steppedValueSet variable="LongueurFiletEtrangers" first="2000" step="1000" last="3000"/>
-    <steppedValueSet variable="SortieSemaine" first="2" step="1" last="7"/>
-    <enumeratedValueSet variable="ZonesExclusionPeche">
-      <value value="true"/>
-      <value value="false"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="PropBiomassPecheSenegalais">
-      <value value="1"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="PropBiomassPecheEtrangers">
-      <value value="1"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="QtéMaxPoissonPirogueEtrangers">
-      <value value="250"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="QtéMaxPoissonPirogue">
-      <value value="250"/>
-    </enumeratedValueSet>
-    <steppedValueSet variable="PrixPoisson" first="1000" step="500" last="3000"/>
-    <enumeratedValueSet variable="nbBoats">
-      <value value="490"/>
-    </enumeratedValueSet>
-    <steppedValueSet variable="ReserveIntegrale" first="0" step="1" last="6"/>
-    <enumeratedValueSet variable="CoutMaintenance">
-      <value value="3000"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="ProportionSenegalais">
-      <value value="50"/>
-    </enumeratedValueSet>
-  </experiment>
-  <experiment name="mathias_et_al" repetitions="10" runMetricsEveryStep="false">
-    <setup>setup</setup>
-    <go>go</go>
-    <timeLimit steps="3650"/>
-    <metric>sumBiomass</metric>
-    <metric>biomassfished</metric>
-    <metric>capital_moyen_1</metric>
-    <metric>capital_moyen_2</metric>
-    <metric>meanMST</metric>
-    <metric>medianMFET</metric>
-    <metric>MFETb</metric>
-    <metric>MFETc</metric>
-    <metric>MSTb</metric>
-    <metric>MSTc</metric>
-    <enumeratedValueSet variable="LongueurFilet">
-      <value value="2000"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="PropBiomassPecheSenegalais">
-      <value value="1"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="QtéMaxPoissonPirogueEtrangers">
-      <value value="31"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="PrixPoisson">
-      <value value="1900"/>
-    </enumeratedValueSet>
-    <steppedValueSet variable="BiomassInit" first="0" step="40000" last="200000"/>
-    <steppedValueSet variable="nbBoats" first="50" step="50" last="400"/>
-    <enumeratedValueSet variable="LongueurFiletEtrangers">
-      <value value="3000"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="ReserveIntegrale">
-      <value value="0"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="satifsactionCapitalG">
-      <value value="1085000000"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="SatisfactionCapital">
-      <value value="5000000"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="satisfactionBiomassG">
-      <value value="100000"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="ZonesExclusionPeche">
-      <value value="false"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="SortieSemaine">
-      <value value="7"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="capital_totalI">
-      <value value="100000"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="PropBiomassPecheEtrangers">
-      <value value="3"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="QtéMaxPoissonPirogue">
-      <value value="34"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="CoutMaintenance">
-      <value value="3000"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="ProportionSenegalais">
-      <value value="50"/>
-    </enumeratedValueSet>
-  </experiment>
-  <experiment name="mathias_et_al_reserve_integreal" repetitions="10" runMetricsEveryStep="false">
-    <setup>setup</setup>
-    <go>go</go>
-    <timeLimit steps="3650"/>
-    <metric>sumBiomass</metric>
-    <metric>biomassfished</metric>
-    <metric>capital_moyen_1</metric>
-    <metric>capital_moyen_2</metric>
-    <metric>meanMST</metric>
-    <metric>medianMFET</metric>
-    <metric>MFETb</metric>
-    <metric>MFETc</metric>
-    <metric>MSTb</metric>
-    <metric>MSTc</metric>
-    <enumeratedValueSet variable="LongueurFilet">
-      <value value="2000"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="PropBiomassPecheSenegalais">
-      <value value="1"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="QtéMaxPoissonPirogueEtrangers">
-      <value value="31"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="PrixPoisson">
-      <value value="1900"/>
-    </enumeratedValueSet>
-    <steppedValueSet variable="BiomassInit" first="0" step="40000" last="200000"/>
-    <steppedValueSet variable="nbBoats" first="50" step="50" last="400"/>
-    <enumeratedValueSet variable="LongueurFiletEtrangers">
-      <value value="3000"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="ReserveIntegrale">
-      <value value="0"/>
-      <value value="2"/>
-      <value value="6"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="satifsactionCapitalG">
-      <value value="1085000000"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="SatisfactionCapital">
-      <value value="5000000"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="satisfactionBiomassG">
-      <value value="100000"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="ZonesExclusionPeche">
-      <value value="false"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="SortieSemaine">
-      <value value="7"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="capital_totalI">
-      <value value="100000"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="PropBiomassPecheEtrangers">
-      <value value="3"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="QtéMaxPoissonPirogue">
-      <value value="34"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="CoutMaintenance">
-      <value value="3000"/>
-    </enumeratedValueSet>
-    <enumeratedValueSet variable="ProportionSenegalais">
-      <value value="50"/>
-    </enumeratedValueSet>
-  </experiment>
-</experiments>
-@#$#@#$#@
-@#$#@#$#@
-default
-0.0
--0.2 0 0.0 1.0
-0.0 1 1.0 0.0
-0.2 0 0.0 1.0
-link direction
-true
-0
-Line -7500403 true 150 150 90 180
-Line -7500403 true 150 150 210 180
-@#$#@#$#@
-1
-@#$#@#$#@
